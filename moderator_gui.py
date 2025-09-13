@@ -32,6 +32,9 @@ class ModeratorGUI:
         # Video display variables
         self.video_label = None
         self.current_frame = None
+        self._last_frame_update = 0
+        self._video_configured = False
+        self._frame_skip_counter = 0
         
         # Data variables
         self.participant_data = {}
@@ -361,16 +364,16 @@ class ModeratorGUI:
                     count = len(participant_data) if participant_data else 0
                     self.root.after(0, lambda: self.participant_count_label.config(text=f"Participants: {count}"))
                 
-                # Update participant display every 2 seconds to reduce overhead
-                if update_counter % 2 == 0:
+                # Update participant display every 3 seconds to reduce overhead
+                if update_counter % 3 == 0:
                     self.root.after(0, self.update_participant_display)
                 
-                # Update activity chart every 3 seconds
-                if update_counter % 3 == 0:
+                # Update activity chart every 5 seconds
+                if update_counter % 5 == 0:
                     self.root.after(0, self.update_activity_chart)
                 
-                # Update analytics every 5 seconds
-                if update_counter % 5 == 0:
+                # Update analytics every 10 seconds
+                if update_counter % 10 == 0:
                     self.root.after(0, self.update_analytics)
                 
                 time.sleep(1.0)  # Update every second
@@ -380,32 +383,44 @@ class ModeratorGUI:
                 break
     
     def update_video_frame(self, frame):
-        """Update the video display with a new frame - optimized for performance"""
-        if frame is not None:
+        """Update the video display with a new frame - optimized for smooth display"""
+        if frame is not None and hasattr(self, 'video_label') and self.video_label:
             try:
+                # Skip frame processing if update is too frequent (reduce flickering)
+                current_time = time.time()
+                if hasattr(self, '_last_frame_update'):
+                    if current_time - self._last_frame_update < 0.033:  # ~30 FPS max
+                        return
+                self._last_frame_update = current_time
+                
                 # Convert frame from BGR to RGB for tkinter
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 
                 # Resize frame to fit the display area - optimized size
                 height, width = frame_rgb.shape[:2]
-                display_width = 480  # Reduced from 640 for better performance
-                display_height = 360  # Reduced from 480 for better performance
+                display_width = 420  # Smaller for better performance
+                display_height = 315  # Maintain 4:3 aspect ratio
                 
                 # Calculate scaling to maintain aspect ratio
                 scale = min(display_width/width, display_height/height)
                 new_width = int(width * scale)
                 new_height = int(height * scale)
                 
-                # Use faster interpolation
+                # Use fastest interpolation for real-time display
                 frame_resized = cv2.resize(frame_rgb, (new_width, new_height), 
-                                         interpolation=cv2.INTER_LINEAR)
+                                         interpolation=cv2.INTER_NEAREST)
                 
                 # Convert to PIL Image and then to PhotoImage
                 pil_image = Image.fromarray(frame_resized)
                 photo = ImageTk.PhotoImage(pil_image)
                 
-                # Update the video label
-                self.video_label.configure(image=photo, text="")
+                # Update the video label with less frequent configure calls
+                if not hasattr(self, '_video_configured') or not self._video_configured:
+                    self.video_label.configure(image=photo, text="")
+                    self._video_configured = True
+                else:
+                    self.video_label.configure(image=photo)
+                
                 self.video_label.image = photo  # Keep a reference
                 
             except Exception as e:
