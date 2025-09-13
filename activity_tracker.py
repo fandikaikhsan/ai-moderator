@@ -61,6 +61,10 @@ class ActivityTracker:
         # Interruption detection
         self.speaking_state_history = deque(maxlen=30)  # 1 second at 30 FPS
         
+        # Transcript tracking - detailed timeline of speaking events
+        self.transcript_log = []  # List of speaking events with timestamps
+        self.last_speaking_state = set()  # Track previous speaking state for change detection
+        
     def update_activity(self, speech_activities: Dict[int, 'SpeechActivity']):
         """
         Update activity tracking with current speech activities
@@ -105,6 +109,9 @@ class ActivityTracker:
         }
         self.activity_history.append(activity_snapshot)
         
+        # Log transcript events (speaking state changes)
+        self._log_transcript_events(currently_speaking, current_time)
+        
         # Update participation levels
         self._update_participation_levels()
         
@@ -142,24 +149,60 @@ class ActivityTracker:
                 )
                 participant.current_session_start = None
     
-    def _detect_interruptions(self, currently_speaking: List[int], current_time: float):
-        """Detect interruptions and turn-taking patterns"""
-        # Store current speaking state
-        self.speaking_state_history.append({
-            'timestamp': current_time,
-            'speakers': currently_speaking.copy()
-        })
+    def _log_transcript_events(self, currently_speaking: List[int], current_time: float):
+        """Log transcript events when speaking state changes"""
+        current_speakers_set = set(currently_speaking)
         
-        if len(self.speaking_state_history) < 2:
-            return
+        # Check for speaking state changes
+        if current_speakers_set != self.last_speaking_state:
+            # Calculate relative time from discussion start
+            relative_time = current_time - self.discussion_start_time
+            
+            # Log speaking started events
+            started_speaking = current_speakers_set - self.last_speaking_state
+            for person_id in started_speaking:
+                self.transcript_log.append({
+                    'timestamp': current_time,
+                    'relative_time': relative_time,
+                    'event_type': 'speaking_started',
+                    'person_id': person_id,
+                    'person_name': f"Person {person_id}",
+                    'concurrent_speakers': list(current_speakers_set),
+                    'is_interruption': len(self.last_speaking_state) > 0
+                })
+            
+            # Log speaking stopped events
+            stopped_speaking = self.last_speaking_state - current_speakers_set
+            for person_id in stopped_speaking:
+                self.transcript_log.append({
+                    'timestamp': current_time,
+                    'relative_time': relative_time,
+                    'event_type': 'speaking_stopped',
+                    'person_id': person_id,
+                    'person_name': f"Person {person_id}",
+                    'concurrent_speakers': list(current_speakers_set),
+                    'was_interrupted': person_id in self.last_speaking_state and len(current_speakers_set) > 0
+                })
+            
+            # Update last speaking state
+            self.last_speaking_state = current_speakers_set.copy()
+    
+    def _detect_interruptions(self, current_speakers: List[int], current_time: float):
+        """Detect and track interruptions"""
+        current_speakers_set = set(current_speakers)
         
-        # Analyze recent changes in speaking state
-        prev_state = self.speaking_state_history[-2]
-        prev_speakers = set(prev_state['speakers'])
-        current_speakers = set(currently_speaking)
+        # Get previous speaking state
+        if len(self.speaking_state_history) > 0:
+            prev_speakers = set(self.speaking_state_history[-1])
+        else:
+            prev_speakers = set()
         
-        # Detect new speakers while others were talking (interruptions)
-        new_speakers = current_speakers - prev_speakers
+        # Store current state
+        self.speaking_state_history.append(current_speakers)
+        
+        # Detect new speakers joining ongoing conversation
+        new_speakers = current_speakers_set - prev_speakers
+        
         if len(prev_speakers) > 0 and len(new_speakers) > 0:
             # Someone started speaking while others were already talking
             for interrupter in new_speakers:
@@ -279,20 +322,23 @@ class ActivityTracker:
         if not self.participants:
             return 0.0
         
-        metrics = self.get_discussion_metrics()
+        # Calculate balance score directly to avoid circular dependency
+        balance_score = self._calculate_turn_taking_balance()
         
-        # Factors for quality score
-        balance_score = metrics.turn_taking_balance
+        # Calculate other values directly
+        total_speaking_time = sum(p.total_speaking_time for p in self.participants.values())
+        discussion_duration = time.time() - self.discussion_start_time
+        overlapping_speech_time = 0.0  # Simplified for now - could calculate from transcript log
         
         # Participation rate (how much of total time was spent speaking)
-        participation_rate = min(1.0, metrics.total_speaking_time / max(1, metrics.discussion_duration))
+        participation_rate = min(1.0, total_speaking_time / max(1, discussion_duration))
         
         # Interruption penalty
         total_interruptions = sum(p.interruptions_made for p in self.participants.values())
         interruption_penalty = max(0, 1 - (total_interruptions / max(1, len(self.participants) * 10)))
         
         # Overlap penalty (some overlap is natural, too much is chaotic)
-        overlap_ratio = metrics.overlapping_speech_time / max(1, metrics.total_speaking_time)
+        overlap_ratio = overlapping_speech_time / max(1, total_speaking_time)
         overlap_penalty = max(0, 1 - max(0, overlap_ratio - 0.1) * 2)  # Penalty starts at 10% overlap
         
         # Combine factors
@@ -351,7 +397,12 @@ class ActivityTracker:
                 'discussion_quality_score': metrics.discussion_quality_score
             },
             'participants': {},
-            'activity_matrix': activity_matrix
+            'activity_matrix': activity_matrix,
+            'transcript': {
+                'events': self.transcript_log,
+                'total_events': len(self.transcript_log),
+                'summary': self._generate_transcript_summary()
+            }
         }
         
         # Export detailed participant data
@@ -369,11 +420,49 @@ class ActivityTracker:
         
         return session_data
     
+    def _generate_transcript_summary(self) -> Dict:
+        """Generate a summary of the transcript events"""
+        if not self.transcript_log:
+            return {
+                'total_speaking_events': 0,
+                'interruptions': 0,
+                'speaker_changes': 0,
+                'longest_speaking_session': 0.0
+            }
+        
+        speaking_starts = [event for event in self.transcript_log if event['event_type'] == 'speaking_started']
+        speaking_stops = [event for event in self.transcript_log if event['event_type'] == 'speaking_stopped']
+        interruptions = [event for event in speaking_starts if event['is_interruption']]
+        
+        # Calculate speaking session durations
+        session_durations = []
+        for start_event in speaking_starts:
+            person_id = start_event['person_id']
+            start_time = start_event['relative_time']
+            
+            # Find corresponding stop event
+            for stop_event in speaking_stops:
+                if (stop_event['person_id'] == person_id and 
+                    stop_event['relative_time'] > start_time):
+                    duration = stop_event['relative_time'] - start_time
+                    session_durations.append(duration)
+                    break
+        
+        return {
+            'total_speaking_events': len(speaking_starts),
+            'interruptions': len(interruptions),
+            'speaker_changes': len(speaking_starts) + len(speaking_stops),
+            'longest_speaking_session': max(session_durations) if session_durations else 0.0,
+            'average_speaking_session': sum(session_durations) / len(session_durations) if session_durations else 0.0
+        }
+    
     def reset_session(self):
         """Reset all tracking data for a new session"""
         self.participants.clear()
         self.activity_history.clear()
         self.intensity_history.clear()
         self.speaking_state_history.clear()
+        self.transcript_log.clear()
+        self.last_speaking_state.clear()
         self.discussion_start_time = time.time()
         self.last_update_time = time.time()
