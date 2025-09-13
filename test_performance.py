@@ -1,13 +1,118 @@
 #!/usr/bin/env python3
 """
-Performance test for AI Discussion Moderator
-Tests FPS improvements and system optimization
+Performance test for the AI Moderator
+Tests FPS improvements after optimization
 """
 
 import time
 import cv2
-import threading
-from collections import deque
+import sys
+import os
+
+# Add the project directory to Python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from main import AIModerator
+
+def test_performance():
+    """Test the performance of the AI Moderator"""
+    print("🚀 AI Moderator Performance Test")
+    print("=" * 40)
+    
+    # Test headless mode for pure performance measurement
+    print("Testing camera and basic processing...")
+    
+    try:
+        # Initialize camera directly for baseline test
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            print("❌ Camera not available")
+            return
+        
+        print("📹 Camera initialized successfully")
+        
+        # Test baseline camera FPS
+        print("\\n🔧 Testing baseline camera FPS (no AI processing)...")
+        frame_count = 0
+        start_time = time.time()
+        test_duration = 5  # 5 seconds test
+        
+        while time.time() - start_time < test_duration:
+            ret, frame = cap.read()
+            if ret:
+                frame_count += 1
+                # Just basic resize to simulate minimal processing
+                if frame.shape[1] > 640:
+                    frame = cv2.resize(frame, (640, 480))
+        
+        baseline_fps = frame_count / test_duration
+        print(f"✅ Baseline FPS: {baseline_fps:.1f}")
+        
+        cap.release()
+        
+        # Test with AI Moderator
+        print("\\n🤖 Testing AI Moderator performance...")
+        print("   This will run for 10 seconds with performance monitoring")
+        print("   You should see FPS reports in the output")
+        
+        moderator = AIModerator(gui_mode=False)
+        
+        # Initialize and run briefly
+        if moderator.initialize_camera():
+            print("🎯 Starting AI processing test...")
+            
+            moderator.is_running = True
+            test_start = time.time()
+            frame_count = 0
+            ai_frame_count = 0
+            
+            while time.time() - test_start < 10:  # 10 second test
+                ret, frame = moderator.cap.read()
+                if not ret:
+                    break
+                
+                frame_count += 1
+                
+                # Simulate the optimized processing
+                if frame_count % 5 == 0:  # AI every 5th frame
+                    processed_frame = moderator.process_frame(frame)
+                    ai_frame_count += 1
+                else:
+                    processed_frame = moderator._add_basic_overlay(frame)
+                
+                if frame_count % 25 == 0:  # Update FPS every 25 frames
+                    moderator.update_fps()
+            
+            elapsed = time.time() - test_start
+            total_fps = frame_count / elapsed
+            ai_fps = ai_frame_count / elapsed
+            
+            print(f"\\n📊 Final Results:")
+            print(f"   Total FPS: {total_fps:.1f}")
+            print(f"   AI Processing FPS: {ai_fps:.1f}")
+            print(f"   AI Efficiency: {(ai_frame_count/frame_count*100):.1f}% of frames processed with AI")
+            print(f"   Performance Ratio: {(total_fps/baseline_fps*100):.1f}% of baseline")
+            
+            if total_fps >= 20:
+                print("✅ EXCELLENT: >20 FPS achieved!")
+            elif total_fps >= 15:
+                print("✅ GOOD: 15-20 FPS achieved")
+            elif total_fps >= 10:
+                print("⚠️ ACCEPTABLE: 10-15 FPS achieved")
+            else:
+                print("❌ POOR: <10 FPS - needs more optimization")
+        
+        moderator.cleanup()
+        
+    except KeyboardInterrupt:
+        print("\\n⚠️ Test interrupted by user")
+    except Exception as e:
+        print("❌ Test error: {e}")
+        import traceback
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    test_performance()
 
 def test_camera_performance():
     """Test raw camera performance"""

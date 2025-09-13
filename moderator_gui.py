@@ -67,11 +67,19 @@ class ModeratorGUI:
         # Left side - Video feed
         self.setup_video_panel(middle_frame)
         
+        # Center - Transcription panel  
+        self.setup_transcription_panel(middle_frame)
+        
         # Right side - Live statistics
         self.setup_stats_panel(middle_frame)
         
         # Bottom section - Analytics and Matrix
         self.setup_analytics_panel(main_container)
+        
+        # Initialize microphone list
+        self.current_microphone_index = None
+        self.microphone_callback = None
+        self.refresh_microphones()
     
     def setup_control_panel(self, parent):
         """Setup control panel with start/stop buttons and session info"""
@@ -165,6 +173,166 @@ class ModeratorGUI:
                                        fg='white', bg='#3c3c3c',
                                        selectcolor='#3c3c3c')
         activity_check.pack(side=tk.LEFT, padx=5)
+    
+    def setup_transcription_panel(self, parent):
+        """Setup real-time transcription panel"""
+        transcription_frame = tk.LabelFrame(parent, text="Live Transcription", 
+                                          font=('Arial', 12, 'bold'),
+                                          fg='white', bg='#3c3c3c',
+                                          relief=tk.RAISED, bd=2)
+        transcription_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+        
+        # Transcription controls
+        controls_frame = tk.Frame(transcription_frame, bg='#3c3c3c')
+        controls_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        # Start/Stop transcription button
+        self.transcription_button = tk.Button(controls_frame, text="Start Transcription",
+                                            command=self.toggle_transcription,
+                                            font=('Arial', 10, 'bold'),
+                                            bg='#4CAF50', fg='white',
+                                            width=15)
+        self.transcription_button.pack(side=tk.LEFT, padx=5)
+        
+        # Generate Summary button
+        self.summary_button = tk.Button(controls_frame, text="Generate Summary",
+                                       command=self.generate_summary,
+                                       font=('Arial', 10, 'bold'),
+                                       bg='#FF9800', fg='white',
+                                       width=15, state=tk.DISABLED)
+        self.summary_button.pack(side=tk.LEFT, padx=5)
+        
+        # Clear transcription button
+        clear_button = tk.Button(controls_frame, text="Clear",
+                               command=self.clear_transcription,
+                               font=('Arial', 10),
+                               bg='#f44336', fg='white',
+                               width=10)
+        clear_button.pack(side=tk.LEFT, padx=5)
+        
+        # Microphone selection
+        mic_frame = tk.Frame(controls_frame, bg='#3c3c3c')
+        mic_frame.pack(side=tk.RIGHT, padx=5)
+        
+        tk.Label(mic_frame, text="Microphone:", 
+                font=('Arial', 10), fg='white', bg='#3c3c3c').pack(side=tk.LEFT)
+        
+        self.microphone_var = tk.StringVar()
+        self.microphone_dropdown = ttk.Combobox(mic_frame, textvariable=self.microphone_var,
+                                               width=20, state="readonly")
+        self.microphone_dropdown.pack(side=tk.LEFT, padx=(5, 0))
+        self.microphone_dropdown.bind('<<ComboboxSelected>>', self.on_microphone_changed)
+        
+        # Refresh microphones button
+        refresh_button = tk.Button(mic_frame, text="🔄",
+                                 command=self.refresh_microphones,
+                                 font=('Arial', 8),
+                                 bg='#607D8B', fg='white',
+                                 width=3)
+        refresh_button.pack(side=tk.LEFT, padx=(2, 0))
+        
+        # Create notebook for transcription tabs
+        self.transcription_notebook = ttk.Notebook(transcription_frame)
+        self.transcription_notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        # Live transcript tab
+        self.setup_live_transcript_tab()
+        
+        # Summary tab
+        self.setup_summary_tab()
+        
+        # Transcription variables
+        self.is_transcribing = False
+        self.transcription_data = {}
+    
+    def setup_live_transcript_tab(self):
+        """Setup live transcript display tab"""
+        transcript_frame = tk.Frame(self.transcription_notebook, bg='#2b2b2b')
+        self.transcription_notebook.add(transcript_frame, text="Live Transcript")
+        
+        # Scrollable text area for transcript
+        transcript_scroll_frame = tk.Frame(transcript_frame, bg='#2b2b2b')
+        transcript_scroll_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Scrollbar
+        transcript_scrollbar = tk.Scrollbar(transcript_scroll_frame)
+        transcript_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Text widget for transcript
+        self.transcript_text = tk.Text(transcript_scroll_frame, 
+                                     bg='#1e1e1e', fg='white',
+                                     font=('Courier', 10),
+                                     wrap=tk.WORD,
+                                     yscrollcommand=transcript_scrollbar.set,
+                                     state=tk.DISABLED)
+        self.transcript_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        transcript_scrollbar.config(command=self.transcript_text.yview)
+        
+        # Configure text tags for different participants
+        self.transcript_text.tag_configure("participant1", foreground="#4CAF50")
+        self.transcript_text.tag_configure("participant2", foreground="#2196F3") 
+        self.transcript_text.tag_configure("participant3", foreground="#FF9800")
+        self.transcript_text.tag_configure("participant4", foreground="#9C27B0")
+        self.transcript_text.tag_configure("timestamp", foreground="#757575")
+        
+        # Status frame at bottom
+        status_frame = tk.Frame(transcript_frame, bg='#2b2b2b')
+        status_frame.pack(fill=tk.X, padx=5, pady=2)
+        
+        self.transcription_status = tk.Label(status_frame, 
+                                           text="Transcription stopped",
+                                           font=('Arial', 9),
+                                           fg='#757575', bg='#2b2b2b')
+        self.transcription_status.pack(side=tk.LEFT)
+        
+        self.word_count_label = tk.Label(status_frame,
+                                       text="Words: 0",
+                                       font=('Arial', 9),
+                                       fg='#757575', bg='#2b2b2b')
+        self.word_count_label.pack(side=tk.RIGHT)
+    
+    def setup_summary_tab(self):
+        """Setup discussion summary display tab"""
+        summary_frame = tk.Frame(self.transcription_notebook, bg='#2b2b2b')
+        self.transcription_notebook.add(summary_frame, text="Summary")
+        
+        # Summary display with scrollbar
+        summary_scroll_frame = tk.Frame(summary_frame, bg='#2b2b2b')
+        summary_scroll_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        summary_scrollbar = tk.Scrollbar(summary_scroll_frame)
+        summary_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.summary_text = tk.Text(summary_scroll_frame,
+                                  bg='#1e1e1e', fg='white',
+                                  font=('Arial', 11),
+                                  wrap=tk.WORD,
+                                  yscrollcommand=summary_scrollbar.set,
+                                  state=tk.DISABLED)
+        self.summary_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        summary_scrollbar.config(command=self.summary_text.yview)
+        
+        # Configure text tags for summary formatting
+        self.summary_text.tag_configure("title", font=('Arial', 12, 'bold'), foreground="#4CAF50")
+        self.summary_text.tag_configure("section", font=('Arial', 11, 'bold'), foreground="#2196F3")
+        self.summary_text.tag_configure("highlight", foreground="#FF9800")
+        self.summary_text.tag_configure("normal", foreground="white")
+        
+        # Summary controls at bottom
+        summary_controls = tk.Frame(summary_frame, bg='#2b2b2b')
+        summary_controls.pack(fill=tk.X, padx=5, pady=2)
+        
+        export_summary_btn = tk.Button(summary_controls, text="Export Summary",
+                                     command=self.export_summary,
+                                     font=('Arial', 9),
+                                     bg='#2196F3', fg='white')
+        export_summary_btn.pack(side=tk.LEFT)
+        
+        self.summary_status = tk.Label(summary_controls,
+                                     text="No summary generated",
+                                     font=('Arial', 9),
+                                     fg='#757575', bg='#2b2b2b')
+        self.summary_status.pack(side=tk.RIGHT)
     
     def setup_stats_panel(self, parent):
         """Setup live statistics panel"""
@@ -383,23 +551,28 @@ class ModeratorGUI:
                 break
     
     def update_video_frame(self, frame):
-        """Update the video display with a new frame - optimized for smooth display"""
+        """Update the video display with a new frame - highly optimized for smooth display"""
         if frame is not None and hasattr(self, 'video_label') and self.video_label:
             try:
-                # Skip frame processing if update is too frequent (reduce flickering)
+                # Skip frame processing if update is too frequent (reduce flickering and CPU load)
                 current_time = time.time()
                 if hasattr(self, '_last_frame_update'):
-                    if current_time - self._last_frame_update < 0.033:  # ~30 FPS max
+                    if current_time - self._last_frame_update < 0.04:  # 25 FPS max for GUI
                         return
                 self._last_frame_update = current_time
+                
+                # Skip every other frame for GUI display to improve performance
+                self._frame_skip_counter = getattr(self, '_frame_skip_counter', 0) + 1
+                if self._frame_skip_counter % 2 != 0:
+                    return
                 
                 # Convert frame from BGR to RGB for tkinter
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 
-                # Resize frame to fit the display area - optimized size
+                # Resize frame to fit the display area - smaller for better performance
                 height, width = frame_rgb.shape[:2]
-                display_width = 420  # Smaller for better performance
-                display_height = 315  # Maintain 4:3 aspect ratio
+                display_width = 320  # Reduced size for better performance
+                display_height = 240  # Maintain 4:3 aspect ratio
                 
                 # Calculate scaling to maintain aspect ratio
                 scale = min(display_width/width, display_height/height)
@@ -553,6 +726,230 @@ class ModeratorGUI:
                     self.insights_text.insert(tk.END, "• Great discussion balance! 🎉\n")
                 
                 self.insights_text.config(state=tk.DISABLED)
+    
+    # Transcription control methods
+    def toggle_transcription(self):
+        """Toggle speech transcription on/off"""
+        if self.is_transcribing:
+            self.stop_transcription()
+        else:
+            self.start_transcription()
+    
+    def start_transcription(self):
+        """Start speech transcription"""
+        self.is_transcribing = True
+        self.transcription_button.config(text="Stop Transcription", bg='#f44336')
+        self.summary_button.config(state=tk.NORMAL)
+        self.transcription_status.config(text="Transcription active", fg='#4CAF50')
+        
+        # Notify parent app if callback is set
+        if hasattr(self, 'transcription_callback') and self.transcription_callback:
+            self.transcription_callback('start')
+    
+    def stop_transcription(self):
+        """Stop speech transcription"""
+        self.is_transcribing = False
+        self.transcription_button.config(text="Start Transcription", bg='#4CAF50')
+        self.transcription_status.config(text="Transcription stopped", fg='#757575')
+        
+        # Notify parent app if callback is set
+        if hasattr(self, 'transcription_callback') and self.transcription_callback:
+            self.transcription_callback('stop')
+    
+    def update_transcription(self, participant_id: int, text: str):
+        """Update the live transcription display"""
+        if not text.strip():
+            return
+        
+        timestamp = time.strftime("%H:%M:%S")
+        participant_name = f"Participant {participant_id}"
+        
+        # Enable text widget for editing
+        self.transcript_text.config(state=tk.NORMAL)
+        
+        # Add timestamp
+        self.transcript_text.insert(tk.END, f"[{timestamp}] ", "timestamp")
+        
+        # Add participant name with color
+        tag_name = f"participant{min(participant_id, 4)}"  # Limit to 4 colors
+        self.transcript_text.insert(tk.END, f"{participant_name}: ", tag_name)
+        
+        # Add the transcribed text
+        self.transcript_text.insert(tk.END, f"{text}\n", "normal")
+        
+        # Scroll to bottom
+        self.transcript_text.see(tk.END)
+        
+        # Disable editing
+        self.transcript_text.config(state=tk.DISABLED)
+        
+        # Update word count
+        content = self.transcript_text.get(1.0, tk.END)
+        word_count = len(content.split())
+        self.word_count_label.config(text=f"Words: {word_count}")
+    
+    def clear_transcription(self):
+        """Clear all transcription data"""
+        self.transcript_text.config(state=tk.NORMAL)
+        self.transcript_text.delete(1.0, tk.END)
+        self.transcript_text.config(state=tk.DISABLED)
+        
+        self.summary_text.config(state=tk.NORMAL)
+        self.summary_text.delete(1.0, tk.END)
+        self.summary_text.config(state=tk.DISABLED)
+        
+        self.word_count_label.config(text="Words: 0")
+        self.summary_status.config(text="No summary generated")
+        
+        # Notify parent app if callback is set
+        if hasattr(self, 'transcription_callback') and self.transcription_callback:
+            self.transcription_callback('clear')
+    
+    def generate_summary(self):
+        """Generate discussion summary"""
+        self.summary_status.config(text="Generating summary...", fg='#FF9800')
+        
+        # Notify parent app if callback is set
+        if hasattr(self, 'summary_callback') and self.summary_callback:
+            self.summary_callback()
+    
+    def refresh_microphones(self):
+        """Refresh the list of available microphones"""
+        try:
+            # Import here to avoid circular imports
+            from pyaudio_speech_transcriber import PyAudioSpeechTranscriber
+            
+            microphones = PyAudioSpeechTranscriber.get_available_microphones()
+            
+            # Update dropdown values
+            mic_names = []
+            self.microphone_map = {}  # Map display names to indices
+            
+            for mic in microphones:
+                display_name = f"{mic['name']}"
+                if mic.get('is_default', False):
+                    display_name += " (Default)"
+                
+                mic_names.append(display_name)
+                self.microphone_map[display_name] = mic['index']
+            
+            self.microphone_dropdown['values'] = mic_names
+            
+            # Set current selection
+            if hasattr(self, 'current_microphone_index'):
+                for name, index in self.microphone_map.items():
+                    if index == self.current_microphone_index:
+                        self.microphone_var.set(name)
+                        break
+            elif mic_names:
+                # Select default microphone
+                for name in mic_names:
+                    if "(Default)" in name:
+                        self.microphone_var.set(name)
+                        break
+                else:
+                    self.microphone_var.set(mic_names[0])
+            
+        except Exception as e:
+            print(f"Error refreshing microphones: {e}")
+            self.microphone_dropdown['values'] = ["No microphones found"]
+            self.microphone_var.set("No microphones found")
+    
+    def on_microphone_changed(self, event=None):
+        """Handle microphone selection change"""
+        selected_name = self.microphone_var.get()
+        
+        if selected_name in self.microphone_map:
+            microphone_index = self.microphone_map[selected_name]
+            self.current_microphone_index = microphone_index
+            
+            # Notify parent app if callback is set
+            if hasattr(self, 'microphone_callback') and self.microphone_callback:
+                self.microphone_callback(microphone_index)
+            
+            print(f"Selected microphone: {selected_name} (Index: {microphone_index})")
+    
+    def set_microphone_callback(self, callback):
+        """Set callback for microphone changes"""
+        self.microphone_callback = callback
+    
+    def display_summary(self, summary_data: dict):
+        """Display the generated summary"""
+        self.summary_text.config(state=tk.NORMAL)
+        self.summary_text.delete(1.0, tk.END)
+        
+        # Title
+        self.summary_text.insert(tk.END, "Discussion Summary\n", "title")
+        self.summary_text.insert(tk.END, "=" * 50 + "\n\n", "normal")
+        
+        # Main summary
+        if 'summary' in summary_data:
+            self.summary_text.insert(tk.END, "Overview:\n", "section")
+            self.summary_text.insert(tk.END, f"{summary_data['summary']}\n\n", "normal")
+        
+        # Key points
+        if 'key_points' in summary_data and summary_data['key_points']:
+            self.summary_text.insert(tk.END, "Key Points:\n", "section")
+            for point in summary_data['key_points']:
+                self.summary_text.insert(tk.END, f"• {point}\n", "normal")
+            self.summary_text.insert(tk.END, "\n", "normal")
+        
+        # Participant contributions
+        if 'participants_contribution' in summary_data:
+            self.summary_text.insert(tk.END, "Participant Analysis:\n", "section")
+            for participant, contribution in summary_data['participants_contribution'].items():
+                self.summary_text.insert(tk.END, f"• {participant}: ", "highlight")
+                self.summary_text.insert(tk.END, f"{contribution}\n", "normal")
+            self.summary_text.insert(tk.END, "\n", "normal")
+        
+        # Action items
+        if 'action_items' in summary_data and summary_data['action_items']:
+            self.summary_text.insert(tk.END, "Action Items:\n", "section")
+            for item in summary_data['action_items']:
+                self.summary_text.insert(tk.END, f"• {item}\n", "normal")
+            self.summary_text.insert(tk.END, "\n", "normal")
+        
+        # Discussion stats
+        if 'duration_minutes' in summary_data:
+            self.summary_text.insert(tk.END, "Discussion Stats:\n", "section")
+            self.summary_text.insert(tk.END, f"Duration: {summary_data['duration_minutes']} minutes\n", "normal")
+            
+            if 'sentiment' in summary_data:
+                self.summary_text.insert(tk.END, f"Overall Sentiment: {summary_data['sentiment']}\n", "normal")
+        
+        self.summary_text.config(state=tk.DISABLED)
+        self.summary_status.config(text="Summary ready", fg='#4CAF50')
+        
+        # Switch to summary tab
+        self.transcription_notebook.select(1)
+    
+    def export_summary(self):
+        """Export summary to file"""
+        try:
+            from tkinter import filedialog
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+                title="Export Summary"
+            )
+            
+            if filename:
+                content = self.summary_text.get(1.0, tk.END)
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                
+                messagebox.showinfo("Export Complete", f"Summary exported to {filename}")
+                
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export summary: {e}")
+    
+    def set_transcription_callback(self, callback):
+        """Set callback for transcription control"""
+        self.transcription_callback = callback
+    
+    def set_summary_callback(self, callback):
+        """Set callback for summary generation"""
+        self.summary_callback = callback
     
     def on_closing(self):
         """Handle window closing"""

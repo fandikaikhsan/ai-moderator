@@ -17,6 +17,9 @@ from mouth_tracker import MouthTracker, SpeechActivity
 from activity_tracker import ActivityTracker, ParticipantStats
 from discussion_analytics import DiscussionAnalytics
 from moderator_gui import ModeratorGUI
+from speech_transcriber import SpeechTranscriber
+from pyaudio_speech_transcriber import PyAudioSpeechTranscriber
+from discussion_summarizer import DiscussionSummarizer
 
 class AIModerator:
     """Main AI Moderator application class"""
@@ -38,6 +41,10 @@ class AIModerator:
         self.activity_tracker = ActivityTracker()
         self.analytics = DiscussionAnalytics()
         
+        # Initialize speech and summarization modules
+        self.speech_transcriber = PyAudioSpeechTranscriber()
+        self.discussion_summarizer = DiscussionSummarizer()
+        
         # Initialize camera
         self.cap = None
         self.is_running = False
@@ -46,29 +53,33 @@ class AIModerator:
         self.gui = None
         self.processing_thread = None
         
-        # Performance tracking
+        # Speech transcription state
+        self.transcription_active = False
+        
+        # Performance tracking - enhanced
         self.fps_counter = 0
         self.fps_start_time = time.time()
         self.current_fps = 0
+        self.frame_count = 0
+        self.ai_processing_count = 0
+        self.performance_stats = {
+            'total_frames': 0,
+            'ai_frames': 0,
+            'avg_fps': 0,
+            'ai_fps': 0
+        }
         
     def initialize_camera(self) -> bool:
-        """Initialize camera capture with optimized settings"""
+        """Initialize camera capture with default settings (works best on macOS)"""
         try:
             self.cap = cv2.VideoCapture(self.camera_index)
             if not self.cap.isOpened():
                 print(f"ERROR: Could not open camera {self.camera_index}")
                 return False
             
-            # Set camera properties for better performance
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)   # Moderate resolution
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)  # Moderate resolution
-            self.cap.set(cv2.CAP_PROP_FPS, 30)            # High frame rate
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)      # Minimal buffer for low latency
-            
-            # Additional optimizations for macOS
-            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
-            
-            print("Camera initialized successfully with optimized settings")
+            # Use default camera settings - setting properties can cause issues on macOS
+            # The camera will use its native resolution and settings for best compatibility
+            print("Camera initialized successfully with default settings")
             return True
             
         except Exception as e:
@@ -77,7 +88,7 @@ class AIModerator:
     
     def process_frame(self, frame: np.ndarray) -> np.ndarray:
         """
-        Process a single frame through the AI pipeline
+        Process a single frame through the AI pipeline - optimized for performance
         
         Args:
             frame: Input video frame
@@ -85,19 +96,53 @@ class AIModerator:
         Returns:
             Processed frame with annotations
         """
-        # Detect faces
-        faces = self.face_tracker.detect_faces(frame)
+        # Use existing faces if we have recent ones (for performance)
+        if not hasattr(self, '_last_faces_time'):
+            self._last_faces_time = 0
+            self._cached_faces = []
+        
+        current_time = time.time()
+        
+        # Only detect faces every 500ms for better performance
+        if current_time - self._last_faces_time > 0.5 or not self._cached_faces:
+            faces = self.face_tracker.detect_faces(frame)
+            self._cached_faces = faces
+            self._last_faces_time = current_time
+        else:
+            faces = self._cached_faces
+        
         self.current_faces = faces  # Store for GUI access
         
-        # Analyze mouth movements for detected faces
-        speech_activities = self.mouth_tracker.analyze_mouth_movement(faces)
+        # Analyze mouth movements for detected faces (less frequently)
+        speech_activities = {}
+        if faces and (current_time - getattr(self, '_last_mouth_analysis', 0)) > 0.3:
+            speech_activities = self.mouth_tracker.analyze_mouth_movement(faces)
+            self._last_mouth_analysis = current_time
+            
+            # Update activity tracking
+            self.activity_tracker.update_activity(speech_activities)
         
-        # Update activity tracking
-        self.activity_tracker.update_activity(speech_activities)
+        # Process speech transcription if active (throttled)
+        if self.transcription_active and (current_time - getattr(self, '_last_transcription_check', 0)) > 0.5:
+            active_face_ids = [face.id for face in faces]
+            new_transcriptions = self.speech_transcriber.process_audio_queue(active_face_ids)
+            
+            # Update GUI with new transcriptions
+            if self.gui and new_transcriptions:
+                for participant_id, text in new_transcriptions.items():
+                    self.gui.update_transcription(participant_id, text)
+            
+            self._last_transcription_check = current_time
         
-        # Draw visualizations
+        # Draw visualizations (optimized)
         frame = self.face_tracker.draw_faces(frame, faces)
-        frame = self.mouth_tracker.draw_mouth_analysis(frame, faces, speech_activities)
+        if speech_activities:
+            frame = self.mouth_tracker.draw_mouth_analysis(frame, faces, speech_activities)
+        
+        # Add overlay information
+        frame = self._add_overlay_info(frame, faces, speech_activities)
+        
+        return frame
         
         # Add overlay information
         frame = self._add_overlay_info(frame, faces, speech_activities)
@@ -163,13 +208,28 @@ class AIModerator:
         return frame
     
     def update_fps(self):
-        """Update FPS counter"""
+        """Update FPS counter with enhanced performance tracking"""
         self.fps_counter += 1
+        self.frame_count += 1
         current_time = time.time()
         
         if current_time - self.fps_start_time >= 1.0:
-            self.current_fps = self.fps_counter / (current_time - self.fps_start_time)
+            elapsed = current_time - self.fps_start_time
+            self.current_fps = self.fps_counter / elapsed
+            
+            # Update performance stats
+            self.performance_stats['total_frames'] = self.frame_count
+            self.performance_stats['ai_frames'] = self.ai_processing_count
+            self.performance_stats['avg_fps'] = self.current_fps
+            self.performance_stats['ai_fps'] = self.ai_processing_count / elapsed if elapsed > 0 else 0
+            
+            # Print performance info every 5 seconds
+            if self.frame_count > 0 and self.current_fps > 0 and self.frame_count % max(1, int(5 * self.current_fps)) == 0:
+                print(f"Performance: {self.current_fps:.1f} FPS | AI: {self.performance_stats['ai_fps']:.1f} FPS | "
+                      f"AI Ratio: {(self.ai_processing_count/max(1,self.frame_count)*100):.1f}%")
+            
             self.fps_counter = 0
+            self.ai_processing_count = 0
             self.fps_start_time = current_time
     
     def run_headless(self):
@@ -250,15 +310,102 @@ class AIModerator:
         self.gui.get_participant_data = lambda: self.activity_tracker.get_activity_matrix()
         self.gui.get_analytics_data = lambda: self.analytics.analyze_discussion_flow(self.activity_tracker)
         
+        # Setup transcription callbacks
+        self.gui.set_transcription_callback(self._handle_transcription_control)
+        self.gui.set_summary_callback(self._generate_discussion_summary)
+        self.gui.set_microphone_callback(self._handle_microphone_change)
+        
         # Store reference to current faces
         self.current_faces = []
+    
+    def _handle_transcription_control(self, action: str):
+        """Handle transcription control commands from GUI"""
+        if action == 'start':
+            self.transcription_active = True
+            self.speech_transcriber.start_listening()
+            print("Speech transcription started")
+            
+        elif action == 'stop':
+            self.transcription_active = False
+            self.speech_transcriber.stop_listening()
+            print("Speech transcription stopped")
+            
+        elif action == 'clear':
+            self.speech_transcriber.clear_transcriptions()
+            print("Transcription data cleared")
+    
+    def _generate_discussion_summary(self):
+        """Generate and display discussion summary"""
+        try:
+            # Get full transcript and stats
+            full_transcript = self.speech_transcriber.get_full_transcript()
+            discussion_stats = self.speech_transcriber.get_discussion_stats()
+            
+            if not full_transcript.strip():
+                # No transcript available
+                summary_data = {
+                    'summary': "No discussion content available to summarize.",
+                    'key_points': ["No discussion recorded"],
+                    'participants_contribution': {"Info": "No participants detected"},
+                    'action_items': ["No action items identified"],
+                    'sentiment': "Neutral",
+                    'duration_minutes': 0
+                }
+            else:
+                # Generate summary using Ollama
+                summary = self.discussion_summarizer.generate_summary(full_transcript, discussion_stats)
+                summary_data = {
+                    'summary': summary.summary,
+                    'key_points': summary.key_points,
+                    'participants_contribution': summary.participants_contribution,
+                    'action_items': summary.action_items,
+                    'sentiment': summary.sentiment,
+                    'duration_minutes': summary.duration_minutes
+                }
+            
+            # Display in GUI
+            if self.gui:
+                self.gui.display_summary(summary_data)
+                
+            print("Discussion summary generated")
+            
+        except Exception as e:
+            print(f"Error generating summary: {e}")
+            # Show error in GUI
+            if self.gui:
+                error_summary = {
+                    'summary': f"Failed to generate summary: {e}",
+                    'key_points': ["Summary generation failed"],
+                    'participants_contribution': {"Error": str(e)},
+                    'action_items': ["Check Ollama service and model availability"],
+                    'sentiment': "Unknown",
+                    'duration_minutes': 0
+                }
+                self.gui.display_summary(error_summary)
+    
+    def _handle_microphone_change(self, microphone_index: int):
+        """Handle microphone selection change from GUI"""
+        try:
+            success = self.speech_transcriber.change_microphone(microphone_index)
+            if success:
+                print(f"Successfully changed to microphone index {microphone_index}")
+            else:
+                print(f"Failed to change to microphone index {microphone_index}")
+        except Exception as e:
+            print(f"Error changing microphone: {e}")
     
     def _processing_loop(self):
         """Main processing loop for GUI mode - optimized for performance"""
         frame_skip_counter = 0
-        fps_target = 15  # Target 15 FPS for good performance
+        ai_skip_counter = 0
+        fps_target = 30  # Increased target FPS
         target_interval = 1.0 / fps_target
         last_frame_time = time.time()
+        last_ai_time = time.time()
+        
+        # Performance optimizations
+        ai_processing_interval = 0.2  # Process AI every 200ms (5 FPS for AI)
+        gui_update_interval = 1.0 / 25  # Update GUI at 25 FPS max
         
         while self.is_running:
             try:
@@ -269,41 +416,60 @@ class AIModerator:
                     print("Failed to read from camera")
                     break
                 
-                # Skip frames for performance - process every 2nd frame for face detection
-                frame_skip_counter += 1
-                process_ai = (frame_skip_counter % 2 == 0)
+                # Reduce frame size for faster processing
+                height, width = frame.shape[:2]
+                if width > 640:
+                    scale_factor = 640 / width
+                    new_width = int(width * scale_factor)
+                    new_height = int(height * scale_factor)
+                    frame = cv2.resize(frame, (new_width, new_height))
                 
-                if process_ai:
-                    # Process frame with AI (expensive operations)
+                frame_skip_counter += 1
+                ai_skip_counter += 1
+                
+                # Process AI much less frequently (every 200ms instead of every frame)
+                time_since_ai = current_time - last_ai_time
+                should_process_ai = time_since_ai >= ai_processing_interval
+                
+                if should_process_ai:
+                    # Process frame with AI (expensive operations) - much less frequent
                     processed_frame = self.process_frame(frame)
+                    last_ai_time = current_time
+                    ai_skip_counter = 0
+                    self.ai_processing_count += 1  # Track AI processing
                 else:
                     # Just add basic overlay without AI processing
                     processed_frame = self._add_basic_overlay(frame)
                 
-                # Update FPS counter
-                self.update_fps()
+                # Update FPS counter less frequently
+                if frame_skip_counter % 5 == 0:
+                    self.update_fps()
                 
                 # Update GUI with processed frame (limit frequency)
                 time_since_last = current_time - last_frame_time
-                if time_since_last >= target_interval:
+                if time_since_last >= gui_update_interval:
                     if self.gui and hasattr(self.gui, 'update_video_frame'):
-                        # Use after_idle for better performance
-                        self.gui.root.after_idle(lambda f=processed_frame: self.gui.update_video_frame(f))
+                        # Use after instead of after_idle for more predictable timing
+                        self.gui.root.after(1, lambda f=processed_frame.copy(): self.gui.update_video_frame(f))
                     last_frame_time = current_time
                 
-                # Adaptive sleep to maintain target FPS
-                elapsed = time.time() - current_time
-                sleep_time = max(0, target_interval - elapsed)
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
+                # Minimal sleep to prevent CPU overload
+                time.sleep(0.001)  # 1ms sleep
                 
             except Exception as e:
-                print(f"Processing error: {e}")
+                print(f"Error in processing loop: {e}")
                 break
+        
+        print("AI Moderator stopped")
     
     def cleanup(self):
         """Cleanup resources"""
         self.is_running = False
+        
+        # Stop transcription if active
+        if self.transcription_active:
+            self.speech_transcriber.stop_listening()
+            self.transcription_active = False
         
         if self.cap:
             self.cap.release()
