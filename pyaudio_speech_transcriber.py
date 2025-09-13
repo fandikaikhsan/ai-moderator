@@ -332,12 +332,26 @@ class PyAudioSpeechTranscriber:
         self.logger.info("Cleared all transcription data")
     
     def get_full_transcript(self) -> str:
-        """Get full transcript of the discussion"""
-        return " ".join([segment.text for segment in self.transcription_history])
+        """Get full transcript of the discussion in a structured format"""
+        transcript_lines = []
+        for segment in self.transcription_history:
+            timestamp_str = segment.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+            line = f"[{timestamp_str}] Participant {segment.participant_id}: {segment.text}"
+            transcript_lines.append(line)
+        return "\\n".join(transcript_lines)
     
     def get_discussion_stats(self) -> Dict:
         """Get basic discussion statistics"""
+        duration_minutes = 0
+        if self.transcription_history:
+            # Calculate duration from first to last timestamp
+            start_time = self.transcription_history[0].timestamp
+            end_time = self.transcription_history[-1].timestamp
+            duration_seconds = (end_time - start_time).total_seconds()
+            duration_minutes = max(1, duration_seconds / 60)  # At least 1 minute
+        
         return {
             'total_segments': len(self.transcription_history),
-            'participants': len(set(segment.participant_id for segment in self.transcription_history))
+            'participants': len(set(segment.participant_id for segment in self.transcription_history)),
+            'duration_minutes': duration_minutes
         }

@@ -20,6 +20,7 @@ from moderator_gui import ModeratorGUI
 from speech_transcriber import SpeechTranscriber
 from pyaudio_speech_transcriber import PyAudioSpeechTranscriber
 from discussion_summarizer import DiscussionSummarizer
+from lightweight_summarizer import LightweightSummarizer
 
 class AIModerator:
     """Main AI Moderator application class"""
@@ -43,7 +44,7 @@ class AIModerator:
         
         # Initialize speech and summarization modules
         self.speech_transcriber = PyAudioSpeechTranscriber()
-        self.discussion_summarizer = DiscussionSummarizer()
+        self.discussion_summarizer = LightweightSummarizer()  # Using fast lightweight summarizer
         
         # Initialize camera
         self.cap = None

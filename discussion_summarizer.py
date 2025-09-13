@@ -24,12 +24,12 @@ class DiscussionSummary:
 class DiscussionSummarizer:
     """Handles discussion analysis and summarization using local Ollama/Llama"""
     
-    def __init__(self, model_name: str = "llama3.2"):
+    def __init__(self, model_name: str = "llama3.1:latest"):
         """
         Initialize the discussion summarizer
         
         Args:
-            model_name: Name of the Ollama model to use (e.g., "llama3.2", "llama2", "mistral")
+            model_name: Name of the Ollama model to use (e.g., "llama3.1:latest", "llama3.2", "mistral")
         """
         self.model_name = model_name
         self.logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ class DiscussionSummarizer:
         try:
             # Try to list available models
             models = ollama.list()
-            available_models = [model['name'] for model in models.get('models', [])]
+            available_models = [model.model for model in models.models]  # Fixed: use .model attribute
             
             if not available_models:
                 self.logger.warning("No models found in Ollama")
